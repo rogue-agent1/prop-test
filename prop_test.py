@@ -1,94 +1,75 @@
 #!/usr/bin/env python3
-"""prop_test - Property-based testing framework with shrinking."""
-import sys, random
+"""Property-based testing framework."""
+import random, traceback
 
-class TestResult:
-    def __init__(self, passed, args=None, error=None, shrunk=None):
-        self.passed = passed
-        self.args = args
-        self.error = error
-        self.shrunk = shrunk
+class Arbitrary:
+    @staticmethod
+    def int(min_val=-1000, max_val=1000):
+        return lambda: random.randint(min_val, max_val)
+    @staticmethod
+    def string(max_len=20):
+        return lambda: ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(random.randint(0, max_len)))
+    @staticmethod
+    def list_of(gen, max_len=10):
+        return lambda: [gen() for _ in range(random.randint(0, max_len))]
+    @staticmethod
+    def bool():
+        return lambda: random.choice([True, False])
+    @staticmethod
+    def float(min_val=-1000, max_val=1000):
+        return lambda: random.uniform(min_val, max_val)
 
-def integers(min_val=-1000, max_val=1000):
-    return lambda rng: rng.randint(min_val, max_val)
-
-def lists(gen, min_len=0, max_len=20):
-    def generate(rng):
-        n = rng.randint(min_len, max_len)
-        return [gen(rng) for _ in range(n)]
-    return generate
-
-def strings(min_len=0, max_len=20):
-    def generate(rng):
-        n = rng.randint(min_len, max_len)
-        return "".join(chr(rng.randint(32, 126)) for _ in range(n))
-    return generate
-
-def _shrink_int(n):
-    if n == 0: return
-    yield 0
-    if n > 0:
-        yield n // 2
-    else:
-        yield -(abs(n) // 2)
-
-def _shrink_list(lst):
-    if not lst: return
-    yield []
-    yield lst[:len(lst)//2]
-    yield lst[len(lst)//2:]
-    for i in range(len(lst)):
-        yield lst[:i] + lst[i+1:]
-
-def forall(*generators, trials=100, seed=None):
-    def decorator(prop):
-        def run():
-            rng = random.Random(seed or 42)
-            for _ in range(trials):
-                args = [g(rng) for g in generators]
+def forall(*generators, trials=100):
+    def decorator(fn):
+        def wrapper():
+            for trial in range(trials):
+                args = [g() for g in generators]
                 try:
-                    result = prop(*args)
+                    result = fn(*args)
                     if result is False:
-                        return TestResult(False, args=args, error="Property returned False")
+                        return {"status": "FAIL", "trial": trial, "args": args}
                 except Exception as e:
-                    return TestResult(False, args=args, error=str(e))
-            return TestResult(True)
-        return run
+                    return {"status": "ERROR", "trial": trial, "args": args, "error": str(e)}
+            return {"status": "PASS", "trials": trials}
+        wrapper.__name__ = fn.__name__
+        return wrapper
     return decorator
 
-def test():
-    # sort is idempotent
-    @forall(lists(integers()))
-    def sort_idempotent(lst):
-        return sorted(sorted(lst)) == sorted(lst)
-    r = sort_idempotent()
-    assert r.passed
-
-    # sort preserves length
-    @forall(lists(integers()))
-    def sort_length(lst):
-        return len(sorted(lst)) == len(lst)
-    r2 = sort_length()
-    assert r2.passed
-
-    # reverse reverse = identity
-    @forall(lists(integers()))
-    def reverse_reverse(lst):
-        return list(reversed(list(reversed(lst)))) == lst
-    r3 = reverse_reverse()
-    assert r3.passed
-
-    # failing property
-    @forall(integers(1, 100), trials=50)
-    def always_less_than_50(n):
-        return n < 50
-    r4 = always_less_than_50()
-    assert not r4.passed
-
-    print("OK: prop_test")
+def check(prop, verbose=False):
+    result = prop()
+    if verbose or result["status"] != "PASS":
+        print(f"  {prop.__name__}: {result['status']}", end="")
+        if result["status"] != "PASS":
+            print(f" at trial {result['trial']} with args={result['args']}", end="")
+            if "error" in result:
+                print(f" error={result['error']}", end="")
+        print()
+    return result["status"] == "PASS"
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test()
-    else:
-        print("Usage: prop_test.py test")
+    @forall(Arbitrary.list_of(Arbitrary.int()))
+    def sort_preserves_length(xs):
+        return len(sorted(xs)) == len(xs)
+    check(sort_preserves_length, verbose=True)
+
+def test():
+    random.seed(42)
+    @forall(Arbitrary.int(), Arbitrary.int(), trials=50)
+    def commutative_add(a, b):
+        return a + b == b + a
+    assert check(commutative_add)
+    @forall(Arbitrary.list_of(Arbitrary.int()), trials=50)
+    def sort_idempotent(xs):
+        return sorted(sorted(xs)) == sorted(xs)
+    assert check(sort_idempotent)
+    @forall(Arbitrary.string(), trials=50)
+    def reverse_reverse(s):
+        return s[::-1][::-1] == s
+    assert check(reverse_reverse)
+    # Failing property
+    @forall(Arbitrary.int(1, 100), trials=50)
+    def always_even(n):
+        return n % 2 == 0
+    result = always_even()
+    assert result["status"] == "FAIL"
+    print("  prop_test: ALL TESTS PASSED")

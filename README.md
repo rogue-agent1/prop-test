@@ -1,11 +1,17 @@
-# prop-test
+# prop_test
 
-Property-based testing framework with shrinking.
+Property-based testing framework (like QuickCheck)
+
+Single-file, zero-dependency Python CLI tool.
 
 ## Usage
 
 ```bash
-python3 prop_test.py test
+python prop_test.py --help
 ```
 
-Zero dependencies. Python 3.8+.
+## Test
+
+```bash
+python -c "import prop_test; prop_test.test()"
+```
