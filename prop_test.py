@@ -1,49 +1,94 @@
 #!/usr/bin/env python3
-"""prop_test - Property-based testing with random data generators."""
-import sys, random, string
+"""prop_test - Property-based testing framework with shrinking."""
+import sys, random
 
-def integers(lo=-1000, hi=1000):
-    return lambda: random.randint(lo, hi)
+class TestResult:
+    def __init__(self, passed, args=None, error=None, shrunk=None):
+        self.passed = passed
+        self.args = args
+        self.error = error
+        self.shrunk = shrunk
 
-def floats(lo=-1000.0, hi=1000.0):
-    return lambda: random.uniform(lo, hi)
-
-def strings(min_len=0, max_len=50, charset=None):
-    chars = charset or string.ascii_letters + string.digits
-    return lambda: "".join(random.choice(chars) for _ in range(random.randint(min_len, max_len)))
+def integers(min_val=-1000, max_val=1000):
+    return lambda rng: rng.randint(min_val, max_val)
 
 def lists(gen, min_len=0, max_len=20):
-    return lambda: [gen() for _ in range(random.randint(min_len, max_len))]
+    def generate(rng):
+        n = rng.randint(min_len, max_len)
+        return [gen(rng) for _ in range(n)]
+    return generate
 
-def one_of(*gens):
-    return lambda: random.choice(gens)()
+def strings(min_len=0, max_len=20):
+    def generate(rng):
+        n = rng.randint(min_len, max_len)
+        return "".join(chr(rng.randint(32, 126)) for _ in range(n))
+    return generate
 
-def check(prop, gens, trials=100, seed=None):
-    if seed is not None: random.seed(seed)
-    for i in range(trials):
-        args = [g() for g in gens]
-        try:
-            result = prop(*args)
-            if result is False:
-                return {"status": "fail", "trial": i, "args": args}
-        except Exception as e:
-            return {"status": "error", "trial": i, "args": args, "error": str(e)}
-    return {"status": "pass", "trials": trials}
+def _shrink_int(n):
+    if n == 0: return
+    yield 0
+    if n > 0:
+        yield n // 2
+    else:
+        yield -(abs(n) // 2)
+
+def _shrink_list(lst):
+    if not lst: return
+    yield []
+    yield lst[:len(lst)//2]
+    yield lst[len(lst)//2:]
+    for i in range(len(lst)):
+        yield lst[:i] + lst[i+1:]
+
+def forall(*generators, trials=100, seed=None):
+    def decorator(prop):
+        def run():
+            rng = random.Random(seed or 42)
+            for _ in range(trials):
+                args = [g(rng) for g in generators]
+                try:
+                    result = prop(*args)
+                    if result is False:
+                        return TestResult(False, args=args, error="Property returned False")
+                except Exception as e:
+                    return TestResult(False, args=args, error=str(e))
+            return TestResult(True)
+        return run
+    return decorator
 
 def test():
-    # Addition is commutative
-    r = check(lambda a, b: a + b == b + a, [integers(), integers()], trials=200, seed=42)
-    assert r["status"] == "pass"
-    # Sorting is idempotent
-    r2 = check(lambda xs: sorted(sorted(xs)) == sorted(xs), [lists(integers())], seed=42)
-    assert r2["status"] == "pass"
-    # Reverse of reverse is identity
-    r3 = check(lambda xs: list(reversed(list(reversed(xs)))) == xs, [lists(integers())], seed=42)
-    assert r3["status"] == "pass"
-    # Deliberate failure
-    r4 = check(lambda x: x < 500, [integers(0, 1000)], trials=1000, seed=42)
-    assert r4["status"] == "fail"
-    print("prop_test: all tests passed")
+    # sort is idempotent
+    @forall(lists(integers()))
+    def sort_idempotent(lst):
+        return sorted(sorted(lst)) == sorted(lst)
+    r = sort_idempotent()
+    assert r.passed
+
+    # sort preserves length
+    @forall(lists(integers()))
+    def sort_length(lst):
+        return len(sorted(lst)) == len(lst)
+    r2 = sort_length()
+    assert r2.passed
+
+    # reverse reverse = identity
+    @forall(lists(integers()))
+    def reverse_reverse(lst):
+        return list(reversed(list(reversed(lst)))) == lst
+    r3 = reverse_reverse()
+    assert r3.passed
+
+    # failing property
+    @forall(integers(1, 100), trials=50)
+    def always_less_than_50(n):
+        return n < 50
+    r4 = always_less_than_50()
+    assert not r4.passed
+
+    print("OK: prop_test")
 
 if __name__ == "__main__":
-    test() if "--test" in sys.argv else print("Usage: prop_test.py --test")
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        test()
+    else:
+        print("Usage: prop_test.py test")

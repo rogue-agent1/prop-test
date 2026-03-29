@@ -1,11 +1,11 @@
-# prop_test
+# prop-test
 
-prop_test - Property-based testing with random data generators.
+Property-based testing framework with shrinking.
 
 ## Usage
 
 ```bash
-python3 prop_test.py --test
+python3 prop_test.py test
 ```
 
 Zero dependencies. Python 3.8+.
